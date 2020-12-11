@@ -60,9 +60,9 @@ namespace XPMP2 {
 /// The ids of our garbage collection flight loop callback
 XPLMFlightLoopID gGarbageCollectionID = nullptr;
 /// How often to call the garbage collection [s]
-constexpr float GARBAGE_COLLECTION_PERIOD = 60.0f;
+constexpr float GARBAGE_COLLECTION_PERIOD = 0.5f;   // StressTest: IMMEDIATE garbage collection, unload as soon as reaching ref count zero
 /// Unload an unused object after how many seconds?
-constexpr float GARBAGE_COLLECTION_TIMEOUT = 180.0f;
+constexpr float GARBAGE_COLLECTION_TIMEOUT = -1.0f; // StressTest: IMMEDIATE garbage collection, unload as soon as reaching ref count zero
 
 /// a map of a text and a counter
 typedef std::map<std::string, int> mapStrIntTy;

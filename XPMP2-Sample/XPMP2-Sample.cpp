@@ -1,40 +1,6 @@
 /// @file       XPMP2-Sample.cpp
-/// @brief      Example plugin demonstrating XPMP2 techniques
-/// @details    This plugin creates 3 planes, one with each of the available ways of using the XPMP2 library.
-///             All planes move in a circle around a position 200m in front of the user's plane
-///             (even if the user plane moves).
-///
-///             1. Subclassing XPMP2::Aircraft, which is the recommended way. This plane flies
-///             highest, 100m above the user plane.
-///             2. Subclassing the legacy class XPCAircraft. This plane flies in the middle, 50m above the user plane.
-///             3. Using direct C functions. This plane always rolls on the ground, no matter how
-///             high the user plane flies.
-///
-///             Three menu items are provided:
-///
-///             1. "Toggle Planes" creates/removes the planes.
-///             2. "Toggle Visibility" shows/temporary hides the planes without destroying them.
-///             3. "Cycle Models" changes the CSL model used per plane.
-///                 Also, it flips the visibility of labels in the map view...just for a change.
-///
-///             For the plugin to work properly some CSL models are necessary in some folders
-///             under `Resources` (all folders under `Resources` are scanned for
-///             `xsb_aircraft.txt` file, so the actual structure underneath `Resources` does not matter).
-///
-///             The directory structure would look as follows:\n
-///             `XPMP2-Sample/`\n
-///             `  lin_x64/`\n
-///             `    XPMP2-Sample.xpl`\n
-///             `  mac_x64/`\n
-///             `    XPMP2-Sample.xpl`\n
-///             `  win_x64/`\n
-///             `    XPMP2-Sample.xpl`\n
-///             `  Resources/`\n
-///				`    CSL/         <-- install CSL models here`\n
-///             `    Doc8643.txt`\n
-///             `    MapIcons.png`\n
-///             `    Obj8DataRefs.txt`\n
-///             `    related.txt`\n
+/// @brief      Stress Test for CSL Model Creation
+/// @see        https://github.com/TwinFan/XPMP2/issues/23
 ///
 /// @author     Birger Hoppe
 /// @copyright  (c) 2020 Birger Hoppe
@@ -55,10 +21,15 @@
 ///             THE SOFTWARE.
 
 // Standard C headers
+#include <cstdlib>
 #include <cstdio>
 #include <cstdarg>
 #include <cstring>
 #include <cmath>
+#include <ctime>
+
+// Standard C++ headers
+#include <random>
 
 // X-Plane SDK
 #include "XPLMDataAccess.h"
@@ -66,6 +37,7 @@
 #include "XPLMPlugin.h"
 #include "XPLMGraphics.h"
 #include "XPLMMenus.h"
+#include "XPLMProcessing.h"
 
 // Include XPMP2 headers
 #include "XPCAircraft.h"
@@ -76,15 +48,16 @@
 	#error This plugin requires version 300 of the SDK
 #endif
 
-/// Initial type / airline / livery to be used to create our 3 planes
-/// @see https://www.icao.int/publications/DOC8643/Pages/Search.aspx for ICAO aircraft types
+// Need random numbers
+std::random_device rd;  //Will be used to obtain a seed for the random number engine
+std::mt19937 gen(rd()); //Standard mersenne_twister_engine seeded with rd()
+std::uniform_int_distribution<> rndMdl;
+std::uniform_int_distribution<long> rndPlanes(5,15);
 
-/// @see https://forums.x-plane.org/index.php?/files/file/37041-bluebell-obj8-csl-packages/ for the Bluebell package, which includes the models named here
-std::string PLANE_MODEL[3][3] = {
-    { "DH8A", "BER", "" },
-    { "B06",  "TXB", "" },
-    { "A321", "", "" },         // Not specifying the airline means: XPMP2 will randomly take any airline's model - with every switch of models
-};
+XPLMFlightLoopID planeCbId = nullptr;
+
+constexpr int TARGET_NUM_AC = 50;
+constexpr float HOW_OFTEN = -5.0;       // how often to create/destroy planes? (flight loop return value)
 
 //
 // MARK: Utility Functions
@@ -93,11 +66,11 @@ std::string PLANE_MODEL[3][3] = {
 /// Log a message to X-Plane's Log.txt with sprintf-style parameters
 void LogMsg (const char* szMsg, ... )
 {
-    char buf[512];
+    char buf[512] = "StressTest: ";
     va_list args;
     // Write all the variable parameters
     va_start (args, szMsg);
-    std::vsnprintf(buf, sizeof(buf)-2, szMsg, args);
+    std::vsnprintf(buf+12, sizeof(buf)-14, szMsg, args);
     va_end (args);
     std::strcat(buf, "\n");
     // write to log (flushed immediately -> expensive!)
@@ -111,33 +84,11 @@ int CBIntPrefsFunc (const char *, [[maybe_unused]] const char * item, int defaul
     // We always want to replace dataRefs and textures upon load to make the most out of the .obj files
     if (!strcmp(item, XPMP_CFG_ITM_REPLDATAREFS)) return 1;
     if (!strcmp(item, XPMP_CFG_ITM_REPLTEXTURE)) return 1;      // actually...this is ON by default anyway, just to be sure
-#if DEBUG
-    // in debug version of the plugin we provide most complete log output
-    if (!strcmp(item, XPMP_CFG_ITM_MODELMATCHING)) return 1;
+    // StressTest: Always DEBUG-level logging, but not model matching
+    if (!strcmp(item, XPMP_CFG_ITM_MODELMATCHING)) return 0;
     if (!strcmp(item, XPMP_CFG_ITM_LOGLEVEL)) return 0;       // DEBUG logging level
-#endif
     // Otherwise we just accept defaults
     return defaultVal;
-}
-
-/// This is the callback for the plane notifier function, which just logs some info to Log.txt
-/// @note Plane notifier functions are completely optional and actually rarely used,
-///       because you should know already by other means when your plugin creates/modifies/deletes a plane.
-///       So this is for pure demonstration (and testing) purposes.
-void CBPlaneNotifier(XPMPPlaneID            inPlaneID,
-                     XPMPPlaneNotification  inNotification,
-                     void *                 /*inRefcon*/)
-{
-    XPMP2::Aircraft* pAc = XPMP2::AcFindByID(inPlaneID);
-    if (pAc) {
-        LogMsg("XPMP2-Sample: Plane of type %s, airline %s, model %s, label '%s' %s",
-               pAc->acIcaoType.c_str(),
-               pAc->acIcaoAirline.c_str(),
-               pAc->GetModelName().c_str(),
-               pAc->label.c_str(),
-               inNotification == xpmp_PlaneNotification_Created ? "created" :
-               inNotification == xpmp_PlaneNotification_ModelChanged ? "changed" : "destroyed");
-    }
 }
 
 //
@@ -154,8 +105,6 @@ constexpr float PLANE_STACK_ALT_M = 50.0f;
 constexpr float PLANE_CIRCLE_TIME_S = 20.0f;
 /// Time it shall take to fly/roll a full circle [minutes]
 constexpr float PLANE_CIRCLE_TIME_MIN = PLANE_CIRCLE_TIME_S / 60.0f;
-/// Assumed circumfence of one plane's tire (rough guess for commercial jet planes)
-constexpr float PLANE_TIRE_CIRCUMFENCE_M = 3.2f;
 /// Engine / prop rotation assumptions: rotations per minute
 constexpr float PLANE_PROP_RPM = 300.0f;
 
@@ -253,6 +202,8 @@ using namespace XPMP2;
 class SampleAircraft : public Aircraft
 {
 public:
+    double agl = NAN;           // my individual height above ground level
+public:
     /// Constructor just passes on all parameters to library
     SampleAircraft(const std::string& _icaoType,
                    const std::string& _icaoAirline,
@@ -278,7 +229,11 @@ public:
         // informational texts
         strScpy(acInfoTexts.icaoAcType, _icaoType.c_str(), sizeof(acInfoTexts.icaoAcType));
         strScpy(acInfoTexts.icaoAirline, _icaoAirline.c_str(), sizeof(acInfoTexts.icaoAirline));
-        strScpy(acInfoTexts.tailNum, "D-EVEL", sizeof(acInfoTexts.tailNum));
+        strScpy(acInfoTexts.tailNum, "ST-RES", sizeof(acInfoTexts.tailNum));
+        
+        // Individual random altitude
+        static std::uniform_int_distribution<long> rndAlt((long)PLANE_STACK_ALT_M,10*(long)PLANE_STACK_ALT_M);
+        agl = (double)rndAlt(gen);
     }
 
     /// Custom implementation for the virtual function providing updates values
@@ -288,20 +243,12 @@ public:
         const float angle = std::fmod(360.0f * GetTimeFragment(), 360.0f);
         positionTy pos = FindCenterPos(PLANE_DIST_M);               // relative to user's plane
         CirclePos(pos, angle, PLANE_RADIUS_M);                      // turning around a circle
-        pos.y += PLANE_STACK_ALT_M * 2;                             // 100m above user's aircraft
-
-        // Strictly speaking...this is not necessary, we could just write
-        // directly to drawInfo.x/y/z with above values (for y: + GetVertOfs()),
-        // but typically in a real-world application you would actually
-        // have lat/lon/elev...and then the call to SetLocation() is
-        // what you shall do:
-        double lat, lon, elev;
-        // location in lat/lon/feet
-        XPLMLocalToWorld(pos.x, pos.y, pos.z, &lat, &lon, &elev);
-        elev /= M_per_FT;                   // we need elevation in feet
-
-        // So, here we tell the plane its position, which takes care of vertical offset, too
-        SetLocation(lat, lon, elev);
+        pos.y += agl;
+        
+        // Set the position the easy way
+        drawInfo.x = (float)pos.x;
+        drawInfo.y = (float)pos.y + GetVertOfs();
+        drawInfo.z = (float)pos.z;
 
         // further attitude information
         SetPitch(0.0f);
@@ -361,343 +308,13 @@ public:
 
 };
 
-/// The one aircraft of this type that we manage
-SampleAircraft* pSamplePlane = nullptr;
 
+// array of smart pointers to the SampleAircraft object
+typedef std::unique_ptr<SampleAircraft> SampleAircraftPtr;
+typedef std::vector<SampleAircraftPtr> vecAcTy;
 
-//
-// MARK: Using XPMP2 - Legacy XPCAircraft class
-//       XPCAircraft was a wrapper class offered in the original library
-//       already. It now is derived from XPMP2's main class,
-//       XPMP2::Aircraft, to provide the same interface as before.
-//       Still, it is deprecated and should not be used in new applications.
-//       Derive directly from XPMP2::Aircraft instead.
-//
-//       This plane will be 50m higher than user's plane,
-//       circling 200m in front of user's plane.
-//
-
-/// Subclassing XPCAircraft to create our own class
-class LegacySampleAircraft : public XPCAircraft
-{
-public:
-    /// Constructor just passes on all parameters to library
-    LegacySampleAircraft(const char* inICAOCode,
-                         const char* inAirline,
-                         const char* inLivery,
-                         XPMPPlaneID _modeS_id = 0,
-                         const char* inModelName = nullptr) :
-    XPCAircraft(inICAOCode, inAirline, inLivery, _modeS_id, inModelName) {}
-
-    // My own class overwrites the individual data provision functions
-
-    /// Called before rendering to query plane's current position, overwritten to provide your implementation
-    virtual XPMPPlaneCallbackResult GetPlanePosition(XPMPPlanePosition_t* outPosition)
-    {
-        // Calculate the plane's position
-        const float angle = std::fmod(120.0f + 360.0f * GetTimeFragment(), 360.0f);
-        positionTy pos = FindCenterPos(PLANE_DIST_M);               // relative to user's plane
-        CirclePos(pos, angle, PLANE_RADIUS_M);                      // turning around a circle
-        pos.y += PLANE_STACK_ALT_M;                                 // 50m above user's aircraft
-
-        // fill the XPMP2 data structure
-
-        // The size is pre-filled and shall support version differences.
-        // We make the check simple here and only proceed if the library
-        // has at least as much storage as we expected for everything:
-        if (outPosition->size < (long)sizeof(XPMPPlanePosition_t))
-            return xpmpData_Unavailable;
-
-        // location in lat/lon/feet
-        XPLMLocalToWorld(pos.x, pos.y, pos.z,
-                         &outPosition->lat,
-                         &outPosition->lon,
-                         &outPosition->elevation);      // elevation is now given in meter
-        outPosition->elevation /= M_per_FT;             // put it is expected in feet!
-
-        outPosition->pitch          = 0.0f;
-        outPosition->roll           =20.0f;             // rolled 20° right (tight curve!)
-        outPosition->heading        = std::fmod(90.0f + angle, 360.0f);
-        strcpy ( outPosition->label, "XPCAircraft subclassed");
-        outPosition->offsetScale    = 1.0f;             // so that full vertical offset is applied and plane sits on its wheels (should probably always be 1.0)
-        outPosition->clampToGround  = false;
-        outPosition->aiPrio         = 1;
-        outPosition->label_color[0] = 1.0f;             // yellow
-        outPosition->label_color[1] = 1.0f;
-        outPosition->label_color[2] = 0.0f;
-        outPosition->label_color[3] = 1.0f;
-        return xpmpData_NewData;
-    }
-
-    /// Called before rendering to query plane's current configuration, overwritten to provide your implementation
-    virtual XPMPPlaneCallbackResult GetPlaneSurfaces(XPMPPlaneSurfaces_t* outSurfaces)
-    {
-        // The size is pre-filled and shall support version differences.
-        // We make the check simple here and only proceed if the library
-        // has at least as much storage as we expected for everything:
-        if (outSurfaces->size < (long)sizeof(XPMPPlaneSurfaces_t))
-            return xpmpData_Unavailable;
-
-        // gear & flight surfaces keep moving for show
-        outSurfaces->yokePitch          =
-        outSurfaces->yokeHeading        =
-        outSurfaces->yokeRoll           =
-        outSurfaces->gearPosition       =
-        outSurfaces->flapRatio          =
-        outSurfaces->spoilerRatio       =
-        outSurfaces->speedBrakeRatio    =
-        outSurfaces->slatRatio          = GetTimeUpDown();
-        outSurfaces->thrust             = 0.5f;
-
-        // lights: taxi, beacon, and nav lights
-        outSurfaces->lights.timeOffset  = 0;            // unused in XPMP2
-        outSurfaces->lights.taxiLights  = 1;
-        outSurfaces->lights.landLights  = 1;
-        outSurfaces->lights.bcnLights   = 1;
-        outSurfaces->lights.strbLights  = 1;
-        outSurfaces->lights.navLights   = 1;
-        outSurfaces->lights.flashPattern = xpmp_Lights_Pattern_Default; // unused in XPMP2
-
-        // tires don't roll in the air
-        outSurfaces->tireDeflect        = 0;
-        outSurfaces->tireRotDegree      = 0;
-        outSurfaces->tireRotRpm         = 0;
-
-        // For simplicity, we keep engine and prop rotation identical...probably unrealistic
-        constexpr float PROP_REVOLUTIONS = PLANE_PROP_RPM * PLANE_CIRCLE_TIME_MIN;
-        outSurfaces->engRotRpm          =
-        outSurfaces->propRotRpm         = PLANE_PROP_RPM;
-        outSurfaces->engRotDegree       =
-        outSurfaces->propRotDegree      = std::fmod(PROP_REVOLUTIONS * GetTimeFragment() * 360.0f,
-                                                    360.0f);
-        // no reversers in flight
-        outSurfaces->reversRatio        = 0.0f;
-
-        outSurfaces->touchDown          = false;
-
-        return xpmpData_NewData;
-    }
-
-    /// Called before rendering to query plane's current radar visibility, overwritten to provide your implementation
-    virtual XPMPPlaneCallbackResult GetPlaneRadar(XPMPPlaneRadar_t* outRadar)
-    {
-        // The size is pre-filled and shall support version differences.
-        // We make the check simple here and only proceed if the library
-        // has at least as much storage as we expected for everything:
-        if (outRadar->size < (long)sizeof(XPMPPlaneRadar_t))
-            return xpmpData_Unavailable;
-
-        if (outRadar->code != 4711) {
-            outRadar->code               = 4711;
-            outRadar->mode               = xpmpTransponderMode_ModeC;
-            return xpmpData_NewData;
-        }
-        else
-            return xpmpData_Unchanged;
-    }
-
-    /// @brief Called before rendering to query plane's textual information, overwritten to provide your implementation (optional)
-    /// @details Handling this requests is completely optional. The texts are
-    ///          provided on shared dataRefs and used only by few other plugins,
-    ///          one of it is FSTramp.\n
-    ///          Here in the example we keep it simple and just return some known data.
-    virtual XPMPPlaneCallbackResult GetInfoTexts(XPMPInfoTexts_t * outInfoTexts)
-    {
-        // The size is pre-filled and shall support version differences.
-        // We make the check simple here and only proceed if the library
-        // has at least as much storage as we expected for everything:
-        if (outInfoTexts->size < (long)sizeof(XPMPInfoTexts_t))
-            return xpmpData_Unavailable;
-
-        if (acIcaoType      != outInfoTexts->icaoAcType ||
-            acIcaoAirline   != outInfoTexts->icaoAirline) {
-            strScpy(outInfoTexts->icaoAcType,   acIcaoType.c_str(),     sizeof(outInfoTexts->icaoAcType));
-            strScpy(outInfoTexts->icaoAirline,  acIcaoAirline.c_str(),  sizeof(outInfoTexts->icaoAirline));
-            strScpy(outInfoTexts->flightNum, "LH1234", sizeof(outInfoTexts->flightNum));
-            return xpmpData_NewData;
-        }
-        else
-            return xpmpData_Unchanged;
-    }
-
-};
-
-/// The one aircraft of this type that we manage
-LegacySampleAircraft* pLegacyPlane = nullptr;
-
-//
-// MARK: Using XPMP2 - Standard C Functions
-//       This plane will always be on the ground, ie. its altitude is
-//       calculated to be on ground level, gear is down.
-//       The plane's label for display is "Standard C" in red.
-//
-
-/// We handle just one aircraft with standard functions, this one:
-XPMPPlaneID hStdPlane = 0;
-
-/// @brief Handles requests for plane's position data
-/// @see LegacySampleAircraft::GetPlanePosition(), which basically is the very same thing.
-XPMPPlaneCallbackResult SetPositionData (XPMPPlanePosition_t& data)
-{
-    // Calculate the plane's position
-    const float angle = std::fmod(240.0f + 360.0f * GetTimeFragment(), 360.0f);
-    positionTy pos = FindCenterPos(PLANE_DIST_M);               // relative to user's plane
-    CirclePos(pos, angle, PLANE_RADIUS_M);                      // turning around a circle
-
-    // fill the XPMP2 data structure
-
-    // The size is pre-filled and shall support version differences.
-    // We make the check simple here and only proceed if the library
-    // has at least as much storage as we expected for everything:
-    if (data.size < (long)sizeof(XPMPPlanePosition_t))
-        return xpmpData_Unavailable;
-
-    // location in lat/lon/feet
-    XPLMLocalToWorld(pos.x, pos.y, pos.z,
-                     &data.lat,
-                     &data.lon,
-                     &data.elevation);      // elevation is now given in meter
-
-    // We place this plane firmly on the ground using XPMP2's "ground clamping"
-    data.elevation = -500.0f;               // below ground
-    data.clampToGround  = true;             // move on ground
-
-    data.pitch          = 0.0f;             // plane stays level
-    data.roll           = 0.0f;
-    data.heading        = std::fmod(90.0f + angle, 360.0f);
-    strcpy ( data.label, "Standard C");
-    data.offsetScale    = 1.0f;             // so that full vertical offset is applied and plane sits on its wheels (should probably always be 1.0)
-    data.aiPrio         = 1;
-    data.label_color[0] = 1.0f;             // red
-    data.label_color[1] = 0.0f;
-    data.label_color[2] = 0.0f;
-    data.label_color[3] = 1.0f;
-    return xpmpData_NewData;
-}
-
-/// @brief Handles requests for plane's surface data
-/// @see LegacySampleAircraft::GetPlaneSurfaces(), which basically is the very same thing.
-XPMPPlaneCallbackResult SetSurfaceData (XPMPPlaneSurfaces_t& data)
-{
-    // The size is pre-filled and shall support version differences.
-    // We make the check simple here and only proceed if the library
-    // has at least as much storage as we expected for everything:
-    if (data.size < (long)sizeof(XPMPPlaneSurfaces_t))
-        return xpmpData_Unavailable;
-
-    // gear & flight surfaces
-    data.gearPosition       = 1.0;          // gear is always down
-    data.yokePitch          =               // flight surfaces cycle up and down
-    data.yokeHeading        =
-    data.yokeRoll           =
-    data.flapRatio          =
-    data.spoilerRatio       =
-    data.speedBrakeRatio    =
-    data.slatRatio          = GetTimeUpDown();
-    data.thrust             = 0.2f;
-
-    // lights: taxi, beacon, and nav lights
-    data.lights.timeOffset  = 0;            // unused in XPMP2
-    data.lights.taxiLights  = 1;
-    data.lights.landLights  = 0;
-    data.lights.bcnLights   = 1;
-    data.lights.strbLights  = 0;
-    data.lights.navLights   = 1;
-    data.lights.flashPattern = xpmp_Lights_Pattern_Default; // unused in XPMP2
-
-    // tires (assuming a tire circumfence of 3.2m and a circumfence of 628m of the
-    // circle the plane moves around a center position we try to simulate
-    // more or less accurate tire rolling, so the tire turns 196 times for
-    // a full plane's circle, which in turn shall take 10s.
-    constexpr float ROLL_CIRCUMFENCE = float(2.0 * PI * PLANE_RADIUS_M);
-    constexpr float TIRE_REVOLUTIONS = ROLL_CIRCUMFENCE / PLANE_TIRE_CIRCUMFENCE_M;
-    data.tireDeflect        = 0;
-    data.tireRotDegree      = std::fmod(TIRE_REVOLUTIONS * GetTimeFragment() * 360.0f,
-                                        360.0f);
-    data.tireRotRpm         = TIRE_REVOLUTIONS / PLANE_CIRCLE_TIME_MIN;
-    data.tireDeflect        = GetTimeUpDown() * 1.5f;   // 1.5m up/down of tire deflections
-
-    // For simplicity, we keep engine and prop rotation identical...probably unrealistic
-    constexpr float PROP_REVOLUTIONS = PLANE_PROP_RPM * PLANE_CIRCLE_TIME_MIN;
-    data.engRotRpm          =
-    data.propRotRpm         = PLANE_PROP_RPM;
-    data.engRotDegree       =
-    data.propRotDegree      = std::fmod(PROP_REVOLUTIONS * GetTimeFragment() * 360.0f,
-                                        360.0f);
-    // for the show of it we open/close reversers
-    data.reversRatio        = GetTimeUpDown();
-
-    // Some models produces tire smoke at the moment of touch down,
-    // so at 0° we tell the model we would touch down right now
-    data.touchDown          = GetTimeFragment() <= 0.05f;
-
-    return xpmpData_NewData;
-}
-
-/// @brief Handles requests for plane's radar data (doesn't actually change over time)
-/// @see LegacySampleAircraft::GetPlaneRadar(), which basically is the very same thing.
-XPMPPlaneCallbackResult SetRadarData (XPMPPlaneRadar_t& data)
-{
-    // The size is pre-filled and shall support version differences.
-    // We make the check simple here and only proceed if the library
-    // has at least as much storage as we expected for everything:
-    if (data.size < (long)sizeof(XPMPPlaneRadar_t))
-        return xpmpData_Unavailable;
-
-    if (data.code != 1234) {
-        data.code               = 1234;
-        data.mode               = xpmpTransponderMode_ModeC;
-        return xpmpData_NewData;
-    } else
-        return xpmpData_Unchanged;
-}
-
-/// @brief Handles requests for plane's informational texts
-/// @details Handling this requests is completely optional. The texts are
-///          provided on shared dataRefs and used only by few other plugins,
-///          one of it is FSTramp.\n
-///          Here in the example we keep it simple and just return the ICAO plane type.
-/// @see LegacySampleAircraft::GetInfoTexts(), which basically is the very same thing.
-XPMPPlaneCallbackResult SetInfoData (XPMPInfoTexts_t& data)
-{
-    // The size is pre-filled and shall support version differences.
-    // We make the check simple here and only proceed if the library
-    // has at least as much storage as we expected for everything:
-    if (data.size < (long)sizeof(XPMPInfoTexts_t))
-        return xpmpData_Unavailable;
-
-    XPMPGetPlaneICAOAndLivery(hStdPlane,        // get ICAO type from XPMP2
-                              data.icaoAcType,
-                              NULL);
-    strScpy(data.tailNum, "D-ABCD", sizeof(data.tailNum));
-
-    return xpmpData_NewData;
-}
-
-
-/// Callback function handed to XPMP2, will be called in every drawing frame to deliver plane position and configuration
-XPMPPlaneCallbackResult CBPlaneData (XPMPPlaneID         inPlane,
-                                     XPMPPlaneDataType   inDataType,
-                                     void *              ioData,
-                                     void *              /* inRefcon */)
-{
-    // sanity check: our plane?
-    if (inPlane != hStdPlane) return xpmpData_Unavailable;
-
-    // There is 4 requests to deal with
-    switch (inDataType) {
-        case xpmpDataType_Position:
-            return SetPositionData (*(XPMPPlanePosition_t*)ioData);
-        case xpmpDataType_Surfaces:
-            return SetSurfaceData(*(XPMPPlaneSurfaces_t*)ioData);
-        case xpmpDataType_Radar:
-            return SetRadarData(*(XPMPPlaneRadar_t*)ioData);
-        case xpmpDataType_InfoTexts:
-            return SetInfoData(*(XPMPInfoTexts_t*)ioData);
-        default:
-            return xpmpData_Unavailable;
-    }
-}
+// the global vector of all planes we created
+static vecAcTy vecAc;
 
 //
 // MARK: Menu functionality
@@ -716,42 +333,85 @@ bool gbMapLabels = true;
 int gModelIdxBase = 0;
 
 /// Is any plane object created?
-inline bool ArePlanesCreated () { return pSamplePlane || pLegacyPlane || hStdPlane; }
+inline bool ArePlanesCreated () { return !vecAc.empty(); }
 
-/// Create our 3 planes (if they don't exist already)
+/// How many planes are actually instanciated?
+inline long CountInstances ()
+{
+    return std::count_if(vecAc.cbegin(), vecAc.cend(),
+                         [](const SampleAircraftPtr& pAc){return pAc->IsInstanciated();});
+}
+
+/// Create one more additional plane
+void PlaneCreateOne ()
+{
+    static std::string mdlName;     // static avoids recreation all the time on the stack
+    static std::string mdlIcao;
+    static std::string mdlAirline;
+    static std::string mdlLivery;
+    
+    // Which model to pick? (randomly)
+    int mdlIdx = rndMdl(gen);
+    XPMPGetModelInfo2(mdlIdx, mdlName, mdlIcao, mdlAirline, mdlLivery);
+    
+    // Create a new plane
+    vecAc.emplace_back(std::make_unique<SampleAircraft>(mdlIcao, mdlAirline, mdlLivery));
+}
+
+/// Remove an instanciated plane
+void PlaneRemoveOne ()
+{
+    // find first instanciated plane
+    vecAcTy::iterator i = std::find_if(vecAc.begin(), vecAc.end(),
+                                       [](const SampleAircraftPtr& pAc){return pAc->IsInstanciated();});
+    // remove that plane
+    if (i != vecAc.end())
+        vecAc.erase(i);
+}
+
+float PlaneCreationCB (float, float, int, void*)
+{
+    // Number of existing instaces
+    const long numInst = CountInstances();
+    // Bail if there are still a lot of instances to be created
+    if (numInst < (long)vecAc.size() * 8 / 10)
+        return HOW_OFTEN;
+
+    long addCnt = rndPlanes(gen);        // how many planes to add and remove?
+    long delCnt = rndPlanes(gen);
+    
+    // If current numbers of actually created instances
+    // are far away from target then push a bit into the right direction
+    if (numInst < TARGET_NUM_AC * 8 / 10)        // more than 20% too low
+        addCnt += delCnt;                       // ensure net add
+    else if (numInst > TARGET_NUM_AC * 12 / 10)  // more than 20% too high
+        delCnt += addCnt;                       // ensure net deletion
+    
+    // Create planes
+    while (addCnt-- > 0)
+        PlaneCreateOne();
+    
+    // Remove planes
+    while (delCnt-- > 0)
+        PlaneRemoveOne();
+    
+    return HOW_OFTEN;
+}
+
+/// Create our initial planes
 void PlanesCreate ()
 {
-    // 1. New interface of XPMP2::Aircraft class
-    if (!pSamplePlane) try {
-        pSamplePlane = new SampleAircraft(PLANE_MODEL[gModelIdxBase][0],  // type
-                                          PLANE_MODEL[gModelIdxBase][1],  // airline
-                                          PLANE_MODEL[gModelIdxBase][2],  // livery
-                                          0xABCDEF);                      // manually set Mode S id
+    // Create flight loop callback for actual creation of planes
+    if (!planeCbId) {
+        XPLMCreateFlightLoop_t flDef = {
+            sizeof(flDef),
+            xplm_FlightLoop_Phase_BeforeFlightModel,
+            PlaneCreationCB,
+            nullptr
+        };
+        planeCbId = XPLMCreateFlightLoop(&flDef);
     }
-    catch (const XPMP2::XPMP2Error& e) {
-        LogMsg("Could not create object of type SampleAircraft: %s", e.what());
-        pSamplePlane = nullptr;
-    }
-
-    // 2. Subclassing the Legacy XPCAircraft class
-    // Creating the plane can now (this is new in XPMP2) throw an exception
-    if (!pLegacyPlane) try {
-        pLegacyPlane = new LegacySampleAircraft(PLANE_MODEL[(gModelIdxBase+1)%3][0].c_str(),  // type
-                                                PLANE_MODEL[(gModelIdxBase+1)%3][1].c_str(),  // airline
-                                                PLANE_MODEL[(gModelIdxBase+1)%3][2].c_str(),  // livery
-                                                0x123456);                                    // manually set Mode S id
-    }
-    catch (const XPMP2::XPMP2Error& e) {
-        LogMsg("Could not create object of type LegacySampleAircraft: %s", e.what());
-        pLegacyPlane = nullptr;
-    }
-
-    // 3. Using Standard Legacy C interface
-    if (!hStdPlane)
-        hStdPlane = XPMPCreatePlane(PLANE_MODEL[(gModelIdxBase+2)%3][0].c_str(),  // type
-                                    PLANE_MODEL[(gModelIdxBase+2)%3][1].c_str(),  // airline
-                                    PLANE_MODEL[(gModelIdxBase+2)%3][2].c_str(),  // livery
-                                    CBPlaneData, NULL);
+    XPLMScheduleFlightLoop(planeCbId, -10.0, 1);
 
     // Put a checkmark in front of menu item if planes are visible
     XPLMCheckMenuItem(hMenu, 0, ArePlanesCreated()  ? xplm_Menu_Checked : xplm_Menu_Unchecked);
@@ -761,19 +421,13 @@ void PlanesCreate ()
 /// Remove all planes
 void PlanesRemove ()
 {
-    if (pSamplePlane) {
-        delete pSamplePlane;
-        pSamplePlane = nullptr;
-    }
-
-    if (pLegacyPlane) {
-        delete pLegacyPlane;
-        pLegacyPlane = nullptr;
-    }
-
-    if (hStdPlane) {
-        XPMPDestroyPlane(hStdPlane);
-        hStdPlane = 0;
+    // Remove planes
+    vecAc.clear();
+    
+    // Remove flight loop
+    if (planeCbId) {
+        XPLMDestroyFlightLoop(planeCbId);
+        planeCbId = nullptr;
     }
 
     // Remove the checkmark in front of menu item
@@ -785,12 +439,8 @@ void PlanesRemove ()
 void PlanesShowHide ()
 {
     gbVisible = !gbVisible;             // toggle setting
-    if (pSamplePlane)
-        pSamplePlane->SetVisible(gbVisible);
-    if (pLegacyPlane)
-        pLegacyPlane->SetVisible(gbVisible);
-    if (hStdPlane)
-        XPMPSetPlaneVisibility(hStdPlane, gbVisible);
+    for (SampleAircraftPtr& ptr: vecAc)
+        ptr->SetVisible(gbVisible);
 
     // Put a checkmark in front of menu item if planes are visible
     XPLMCheckMenuItem(hMenu, 1, gbVisible           ? xplm_Menu_Checked : xplm_Menu_Unchecked);
@@ -798,41 +448,7 @@ void PlanesShowHide ()
 
 /// Cycle the CSL models of the 3 planes
 void PlanesCycleModels ()
-{
-    // increase the index into our list of CSL models
-    // (this is the index used by the first plane, the XPMP2::Aircraft one)
-    gModelIdxBase = (gModelIdxBase + 1) % 3;
-
-    // Now apply the new model to the 3 planes
-    if (pSamplePlane)
-        pSamplePlane->ChangeModel(PLANE_MODEL[gModelIdxBase][0],  // type
-                                  PLANE_MODEL[gModelIdxBase][1],  // airline
-                                  PLANE_MODEL[gModelIdxBase][2]); // livery
-    if (pLegacyPlane)
-        pLegacyPlane->ChangeModel(PLANE_MODEL[(gModelIdxBase+1)%3][0],  // type
-                                  PLANE_MODEL[(gModelIdxBase+1)%3][1],  // airline
-                                  PLANE_MODEL[(gModelIdxBase+1)%3][2]); // livery
-    if (hStdPlane)
-        XPMPChangePlaneModel(hStdPlane,
-                             PLANE_MODEL[(gModelIdxBase+2)%3][0].c_str(),  // type
-                             PLANE_MODEL[(gModelIdxBase+2)%3][1].c_str(),  // airline
-                             PLANE_MODEL[(gModelIdxBase+2)%3][2].c_str()); // livery
-
-    if (pSamplePlane) {
-        // Demonstrate how to get detailed info of the model in use
-        XPMP2::CSLModelInfo_t cslInfo = pSamplePlane->GetModelInfo();
-        LogMsg("XPMP2-Sample: SamplePlane now using model %s of type %s as defined in line %d of %s",
-            cslInfo.modelName.c_str(), cslInfo.icaoType.c_str(),
-            cslInfo.xsbAircraftLn, cslInfo.xsbAircraftPath.c_str());
-        for (const XPMP2::CSLModelInfo_t::MatchCrit_t& crit : cslInfo.vecMatchCrit)
-            LogMsg("     Matches: %s | %s", crit.icaoAirline.c_str(), crit.livery.c_str());
-    }
-
-    // Completely unrelated...just for a change and for testing that functionality:
-    // We also toggle the display of labels in the map:
-    gbMapLabels = !gbMapLabels;
-    XPMPEnableMap(true, gbMapLabels);
-}
+{}
 
 /// @brief Rematch CSL models based on existing definition
 /// @details This will pick a different (partly random) CSL model
@@ -841,18 +457,8 @@ void PlanesCycleModels ()
 ///          will pick any of the available A321 models.
 void PlanesRematch ()
 {
-    if (pSamplePlane)
-        pSamplePlane->ReMatchModel();
-    if (pLegacyPlane)
-        pLegacyPlane->ReMatchModel();
-    if (hStdPlane) {
-        // There is no standard C function for this task. If really want it
-        // we need to go the detour of fetching the underlying aircraft object
-        XPMP2::Aircraft* pStdAc = XPMPGetAircraft(hStdPlane);
-        if (pStdAc)
-            pStdAc->ReMatchModel();
-    }
-
+    for (SampleAircraftPtr& ptr: vecAc)
+        ptr->ReMatchModel();
 }
 
 void MenuUpdateCheckmarks ()
@@ -915,25 +521,24 @@ void CBMenu (void* /*inMenuRef*/, void* inItemRef)
 
 PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc)
 {
-	std::strcpy(outName, "XPMP2-Sample");
-	std::strcpy(outSig, "TwinFan.plugin.XPMP2-Sample");
-	std::strcpy(outDesc, "Sample plugin demonstrating using XPMP2 library");
+	std::strcpy(outName, "XPMP2-Stress (StressTest)");
+	std::strcpy(outSig, "TwinFan.plugin.XPMP2-Sample-StressTest");
+	std::strcpy(outDesc, "Putting some stress on creating/removing instances");
 
     // use native paths, i.e. Posix style (as opposed to HFS style)
     // https://developer.x-plane.com/2014/12/mac-plugin-developers-you-should-be-using-native-paths/
-
-    /* Disable next line only for testing purposes: Does XPMP2 also handle HFS well? */
     XPLMEnableFeature("XPLM_USE_NATIVE_PATHS",1);
 
     // Create the menu for the plugin
-    int my_slot = XPLMAppendMenuItem(XPLMFindPluginsMenu(), "XPMP2 Sample", NULL, 0);
-    hMenu = XPLMCreateMenu("XPMP2 Sample", XPLMFindPluginsMenu(), my_slot, CBMenu, NULL);
+    int my_slot = XPLMAppendMenuItem(XPLMFindPluginsMenu(), "XPMP2 Stress", NULL, 0);
+    hMenu = XPLMCreateMenu("XPMP2 Stress", XPLMFindPluginsMenu(), my_slot, CBMenu, NULL);
     XPLMAppendMenuItem(hMenu, "Toggle Planes",      (void*)1, 0);
     XPLMAppendMenuItem(hMenu, "Toggle Visibility",  (void*)2, 0);
-    XPLMAppendMenuItem(hMenu, "Cycle Models",       (void*)3, 0);
+    XPLMAppendMenuItem(hMenu, "(Cycle Models)",     (void*)3, 0);
     XPLMAppendMenuItem(hMenu, "Rematch Models",     (void*)4, 0);
     XPLMAppendMenuItem(hMenu, "Toggle AI control",  (void*)5, 0);
     MenuUpdateCheckmarks();
+    
 	return 1;
 }
 
@@ -955,40 +560,44 @@ PLUGIN_API int XPluginEnable(void)
     resourcePath += "Resources";            // should now be something like ".../Resources/plugins/XPMP2-Sample/Resources"
 
     // Try initializing XPMP2:
-    const char *res = XPMPMultiplayerInit ("XPMP2-Sample",          // plugin name,
+    const char *res = XPMPMultiplayerInit ("XPMP2-Stress",          // plugin name,
                                            resourcePath.c_str(),    // path to supplemental files
                                            CBIntPrefsFunc,          // configuration callback function
                                            "C172");                 // default ICAO type
     if (res[0]) {
-        LogMsg("XPMP2-Sample: Initialization of XPMP2 failed: %s", res);
+        LogMsg("Initialization of XPMP2 failed: %s", res);
         return 0;
     }
 
     // Load our CSL models
     res = XPMPLoadCSLPackage(resourcePath.c_str());     // CSL folder root path
     if (res[0]) {
-        LogMsg("XPMP2-Sample: Error while loading CSL packages: %s", res);
+        LogMsg("Error while loading CSL packages: %s", res);
     }
+    
+    // Bail if no models
+    if (XPMPGetNumberOfInstalledModels() <= 0) {
+        LogMsg("No CSL models installed...stress test makes no sense this way!");
+        return 0;
+    }
+    
+    // Now that we know the number of models create a random distribution
+    rndMdl = std::uniform_int_distribution<>(0, XPMPGetNumberOfInstalledModels()-1);
 
     // Now we also try to get control of AI planes. That's optional, though,
     // other plugins (like LiveTraffic, XSquawkBox, X-IvAp...)
     // could have control already
     res = XPMPMultiplayerEnable(CPRequestAIAgain);
     if (res[0]) {
-        LogMsg("XPMP2-Sample: Could not enable AI planes: %s", res);
+        LogMsg("Could not enable AI planes: %s", res);
     }
-
-    // Register the plane notifer function
-    // (this is rarely used in actual applications, but used here for
-    //  demonstration and testing purposes)
-    XPMPRegisterPlaneNotifierFunc(CBPlaneNotifier, NULL);
 
     // *** Create the planes ***
     PlanesCreate();
 
     // Success
     MenuUpdateCheckmarks();
-    LogMsg("XPMP2-Sample: Enabled");
+    LogMsg("Enabled");
 	return 1;
 }
 
@@ -1000,13 +609,10 @@ PLUGIN_API void XPluginDisable(void)
     // Give up AI plane control
     XPMPMultiplayerDisable();
 
-    // Unregister plane notifier (must match function _and_ refcon)
-    XPMPUnregisterPlaneNotifierFunc(CBPlaneNotifier, NULL);
-
     // Properly cleanup the XPMP2 library
     XPMPMultiplayerCleanup();
 
-    LogMsg("XPMP2-Sample: Disabled");
+    LogMsg("Disabled");
 }
 
 PLUGIN_API void XPluginReceiveMessage(XPLMPluginID, long inMsg, void*)

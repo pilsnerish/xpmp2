@@ -870,6 +870,18 @@
 					"$(PROJECT_DIR)/XPMP2-Sample/SDK/Libraries/Mac",
 				);
 				GCC_PRECOMPILE_PREFIX_HEADER = NO;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"APL=1",
+					"IBM=0",
+					"LIN=0",
+					"XPLM200=1",
+					"XPLM210=1",
+					"XPLM300=1",
+					"XPLM301=1",
+					"XPLM303=1",
+					"DEBUG_CTD_DOMOVE=1",
+				);
 				GCC_SYMBOLS_PRIVATE_EXTERN = YES;
 				HEADER_SEARCH_PATHS = "";
 				INFOPLIST_FILE = "";
@@ -910,6 +922,18 @@
 					"$(PROJECT_DIR)/XPMP2-Sample/SDK/Libraries/Mac",
 				);
 				GCC_PRECOMPILE_PREFIX_HEADER = NO;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"NDEBUG=1",
+					"APL=1",
+					"IBM=0",
+					"LIN=0",
+					"XPLM200=1",
+					"XPLM210=1",
+					"XPLM300=1",
+					"XPLM301=1",
+					"XPLM303=1",
+					"DEBUG_CTD_DOMOVE=1",
+				);
 				GCC_SYMBOLS_PRIVATE_EXTERN = YES;
 				HEADER_SEARCH_PATHS = "";
 				INFOPLIST_FILE = "";
