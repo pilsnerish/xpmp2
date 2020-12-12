@@ -30,6 +30,7 @@
 
 // Standard C++ headers
 #include <random>
+#include <memory>
 
 // X-Plane SDK
 #include "XPLMDataAccess.h"
@@ -217,7 +218,9 @@ public:
         // in UpdatePosition()
 
         // Label
-        label = "XPMP2::Aircraft";
+        char buf[50];
+        snprintf(buf, sizeof(buf), "0x%06X", modeS_id);
+        label = buf;
         colLabel[0] = 0.0f;             // green
         colLabel[1] = 1.0f;
         colLabel[2] = 0.0f;
@@ -229,11 +232,13 @@ public:
         // informational texts
         strScpy(acInfoTexts.icaoAcType, _icaoType.c_str(), sizeof(acInfoTexts.icaoAcType));
         strScpy(acInfoTexts.icaoAirline, _icaoAirline.c_str(), sizeof(acInfoTexts.icaoAirline));
-        strScpy(acInfoTexts.tailNum, "ST-RES", sizeof(acInfoTexts.tailNum));
+        strScpy(acInfoTexts.tailNum, buf, sizeof(acInfoTexts.tailNum));
         
-        // Individual random altitude
-        static std::uniform_int_distribution<long> rndAlt((long)PLANE_STACK_ALT_M,10*(long)PLANE_STACK_ALT_M);
-        agl = (double)rndAlt(gen);
+        // Individual altitude
+        static int stackIdx = 0;
+        agl = PLANE_STACK_ALT_M + 9 * (long)PLANE_STACK_ALT_M * stackIdx / TARGET_NUM_AC;
+        if (++stackIdx >= TARGET_NUM_AC)
+            stackIdx = 0;
     }
 
     /// Custom implementation for the virtual function providing updates values
@@ -338,8 +343,8 @@ inline bool ArePlanesCreated () { return !vecAc.empty(); }
 /// How many planes are actually instanciated?
 inline long CountInstances ()
 {
-    return std::count_if(vecAc.cbegin(), vecAc.cend(),
-                         [](const SampleAircraftPtr& pAc){return pAc->IsInstanciated();});
+    return (long)std::count_if(vecAc.cbegin(), vecAc.cend(),
+                               [](const SampleAircraftPtr& pAc){return pAc->IsInstanciated();});
 }
 
 /// Create one more additional plane
