@@ -57,6 +57,7 @@ std::uniform_int_distribution<long> rndPlanes(5,15);
 
 XPLMFlightLoopID planeCbId = nullptr;
 
+constexpr int STABLE_NUM_AC = 10;
 constexpr int TARGET_NUM_AC = 50;
 constexpr float HOW_OFTEN = -5.0;       // how often to create/destroy planes? (flight loop return value)
 
@@ -204,14 +205,17 @@ class SampleAircraft : public Aircraft
 {
 public:
     double agl = NAN;           // my individual height above ground level
+    float diffHead = 0.0f;      // heading difference, ie. how much to deviate from standard circle position
 public:
     /// Constructor just passes on all parameters to library
-    SampleAircraft(const std::string& _icaoType,
+    SampleAircraft(float _diffHead,
+                   const std::string& _icaoType,
                    const std::string& _icaoAirline,
                    const std::string& _livery,
                    XPMPPlaneID _modeS_id = 0,
                    const std::string& _cslId = "") :
-    Aircraft(_icaoType, _icaoAirline, _livery, _modeS_id, _cslId)
+    Aircraft(_icaoType, _icaoAirline, _livery, _modeS_id, _cslId),
+    diffHead(_diffHead)
     {
         // in our sample implementation, label, radar and info texts
         // are not dynamic. In others, they might be, then update them
@@ -245,7 +249,7 @@ public:
     virtual void UpdatePosition (float, int)
     {
         // Calculate the plane's position
-        const float angle = std::fmod(360.0f * GetTimeFragment(), 360.0f);
+        const float angle = std::fmod(360.0f * GetTimeFragment() + diffHead, 360.0f);
         positionTy pos = FindCenterPos(PLANE_DIST_M);               // relative to user's plane
         CirclePos(pos, angle, PLANE_RADIUS_M);                      // turning around a circle
         pos.y += agl;
@@ -318,8 +322,10 @@ public:
 typedef std::unique_ptr<SampleAircraft> SampleAircraftPtr;
 typedef std::vector<SampleAircraftPtr> vecAcTy;
 
-// the global vector of all planes we created
-static vecAcTy vecAc;
+// the global vector of some 20 stable planes that keep on flying all the time
+static vecAcTy vecAcStable;
+// the global vector of all planes we created that come and go
+static vecAcTy vecAcDynamic;
 
 //
 // MARK: Menu functionality
@@ -338,17 +344,17 @@ bool gbMapLabels = true;
 int gModelIdxBase = 0;
 
 /// Is any plane object created?
-inline bool ArePlanesCreated () { return !vecAc.empty(); }
+inline bool ArePlanesCreated () { return !vecAcStable.empty() || !vecAcDynamic.empty(); }
 
 /// How many planes are actually instanciated?
-inline long CountInstances ()
+inline long CountInstances (const vecAcTy& v)
 {
-    return (long)std::count_if(vecAc.cbegin(), vecAc.cend(),
+    return (long)std::count_if(v.cbegin(), v.cend(),
                                [](const SampleAircraftPtr& pAc){return pAc->IsInstanciated();});
 }
 
 /// Create one more additional plane
-void PlaneCreateOne ()
+void PlaneCreateOne (vecAcTy& v, float _diffHead = 0.0f)
 {
     static std::string mdlName;     // static avoids recreation all the time on the stack
     static std::string mdlIcao;
@@ -360,26 +366,26 @@ void PlaneCreateOne ()
     XPMPGetModelInfo2(mdlIdx, mdlName, mdlIcao, mdlAirline, mdlLivery);
     
     // Create a new plane
-    vecAc.emplace_back(std::make_unique<SampleAircraft>(mdlIcao, mdlAirline, mdlLivery));
+    v.emplace_back(std::make_unique<SampleAircraft>(_diffHead, mdlIcao, mdlAirline, mdlLivery));
 }
 
 /// Remove an instanciated plane
-void PlaneRemoveOne ()
+void PlaneRemoveOne (vecAcTy& v)
 {
     // find first instanciated plane
-    vecAcTy::iterator i = std::find_if(vecAc.begin(), vecAc.end(),
+    vecAcTy::iterator i = std::find_if(v.begin(), v.end(),
                                        [](const SampleAircraftPtr& pAc){return pAc->IsInstanciated();});
     // remove that plane
-    if (i != vecAc.end())
-        vecAc.erase(i);
+    if (i != v.end())
+        v.erase(i);
 }
 
 float PlaneCreationCB (float, float, int, void*)
 {
     // Number of existing instaces
-    const long numInst = CountInstances();
+    const long numInst = CountInstances(vecAcDynamic);
     // Bail if there are still a lot of instances to be created
-    if (numInst < (long)vecAc.size() * 8 / 10)
+    if (numInst < (long)vecAcDynamic.size() * 8 / 10)
         return HOW_OFTEN;
 
     long addCnt = rndPlanes(gen);        // how many planes to add and remove?
@@ -394,11 +400,11 @@ float PlaneCreationCB (float, float, int, void*)
     
     // Create planes
     while (addCnt-- > 0)
-        PlaneCreateOne();
+        PlaneCreateOne(vecAcDynamic);
     
     // Remove planes
     while (delCnt-- > 0)
-        PlaneRemoveOne();
+        PlaneRemoveOne(vecAcDynamic);
     
     return HOW_OFTEN;
 }
@@ -406,6 +412,10 @@ float PlaneCreationCB (float, float, int, void*)
 /// Create our initial planes
 void PlanesCreate ()
 {
+    // Create a set of stable planes first which will just keep on flying
+    for (int i = 0; i < STABLE_NUM_AC; ++i)
+        PlaneCreateOne(vecAcStable, 180.0f);        // flying opposite of the dynamic ones
+
     // Create flight loop callback for actual creation of planes
     if (!planeCbId) {
         XPLMCreateFlightLoop_t flDef = {
@@ -427,7 +437,8 @@ void PlanesCreate ()
 void PlanesRemove ()
 {
     // Remove planes
-    vecAc.clear();
+    vecAcDynamic.clear();
+    vecAcStable.clear();
     
     // Remove flight loop
     if (planeCbId) {
@@ -444,7 +455,9 @@ void PlanesRemove ()
 void PlanesShowHide ()
 {
     gbVisible = !gbVisible;             // toggle setting
-    for (SampleAircraftPtr& ptr: vecAc)
+    for (SampleAircraftPtr& ptr: vecAcStable)
+        ptr->SetVisible(gbVisible);
+    for (SampleAircraftPtr& ptr: vecAcDynamic)
         ptr->SetVisible(gbVisible);
 
     // Put a checkmark in front of menu item if planes are visible
@@ -462,7 +475,9 @@ void PlanesCycleModels ()
 ///          will pick any of the available A321 models.
 void PlanesRematch ()
 {
-    for (SampleAircraftPtr& ptr: vecAc)
+    for (SampleAircraftPtr& ptr: vecAcStable)
+        ptr->ReMatchModel();
+    for (SampleAircraftPtr& ptr: vecAcDynamic)
         ptr->ReMatchModel();
 }
 
