@@ -49,6 +49,8 @@
 	#error This plugin requires version 300 of the SDK
 #endif
 
+#define PLUGIN_ID "Stresstest_A"
+
 // Need random numbers
 std::random_device rd;  //Will be used to obtain a seed for the random number engine
 std::mt19937 gen(rd()); //Standard mersenne_twister_engine seeded with rd()
@@ -68,7 +70,7 @@ constexpr float HOW_OFTEN = -5.0;       // how often to create/destroy planes? (
 /// Log a message to X-Plane's Log.txt with sprintf-style parameters
 void LogMsg (const char* szMsg, ... )
 {
-    char buf[512] = "StressTest: ";
+    char buf[512] = PLUGIN_ID ": ";
     va_list args;
     // Write all the variable parameters
     va_start (args, szMsg);
@@ -88,7 +90,7 @@ int CBIntPrefsFunc (const char *, [[maybe_unused]] const char * item, int defaul
     if (!strcmp(item, XPMP_CFG_ITM_REPLTEXTURE)) return 1;      // actually...this is ON by default anyway, just to be sure
     // StressTest: Always DEBUG-level logging, but not model matching
     if (!strcmp(item, XPMP_CFG_ITM_MODELMATCHING)) return 0;
-    if (!strcmp(item, XPMP_CFG_ITM_LOGLEVEL)) return 0;       // DEBUG logging level
+    if (!strcmp(item, XPMP_CFG_ITM_LOGLEVEL)) return 1;       // INFO logging level...DEBUG is just too much
     // Otherwise we just accept defaults
     return defaultVal;
 }
@@ -541,8 +543,8 @@ void CBMenu (void* /*inMenuRef*/, void* inItemRef)
 
 PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc)
 {
-	std::strcpy(outName, "XPMP2-Stress (StressTest)");
-	std::strcpy(outSig, "TwinFan.plugin.XPMP2-Sample-StressTest");
+	std::strcpy(outName, "XPMP2-Stress (" PLUGIN_ID ")");
+	std::strcpy(outSig, "TwinFan.plugin.XPMP2-" PLUGIN_ID);
 	std::strcpy(outDesc, "Putting some stress on creating/removing instances");
 
     // use native paths, i.e. Posix style (as opposed to HFS style)
@@ -550,8 +552,8 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc)
     XPLMEnableFeature("XPLM_USE_NATIVE_PATHS",1);
 
     // Create the menu for the plugin
-    int my_slot = XPLMAppendMenuItem(XPLMFindPluginsMenu(), "XPMP2 Stress", NULL, 0);
-    hMenu = XPLMCreateMenu("XPMP2 Stress", XPLMFindPluginsMenu(), my_slot, CBMenu, NULL);
+    int my_slot = XPLMAppendMenuItem(XPLMFindPluginsMenu(), PLUGIN_ID, NULL, 0);
+    hMenu = XPLMCreateMenu(PLUGIN_ID, XPLMFindPluginsMenu(), my_slot, CBMenu, NULL);
     XPLMAppendMenuItem(hMenu, "Toggle Planes",      (void*)1, 0);
     XPLMAppendMenuItem(hMenu, "Toggle Visibility",  (void*)2, 0);
     XPLMAppendMenuItem(hMenu, "(Cycle Models)",     (void*)3, 0);
@@ -580,7 +582,7 @@ PLUGIN_API int XPluginEnable(void)
     resourcePath += "Resources";            // should now be something like ".../Resources/plugins/XPMP2-Sample/Resources"
 
     // Try initializing XPMP2:
-    const char *res = XPMPMultiplayerInit ("XPMP2-Stress",          // plugin name,
+    const char *res = XPMPMultiplayerInit (PLUGIN_ID,               // plugin name,
                                            resourcePath.c_str(),    // path to supplemental files
                                            CBIntPrefsFunc,          // configuration callback function
                                            "C172");                 // default ICAO type
