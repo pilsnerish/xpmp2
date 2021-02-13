@@ -49,7 +49,15 @@
 	#error This plugin requires version 300 of the SDK
 #endif
 
-#define PLUGIN_ID "Stresstest_A"
+/// What's this instance called? Derived from plugin folder/binary name
+std::string instanceName;
+XPLMPluginID myPluginId = -1;
+
+/// How many private CSLs to add? (20 x the different of 'A' to the last char of the instance name + 1)
+int HowManyDRtoAdd()
+{
+    return abs(int(instanceName.back() - 'A' + 1) * 20);
+}
 
 // Need random numbers
 std::random_device rd;  //Will be used to obtain a seed for the random number engine
@@ -70,11 +78,12 @@ constexpr float HOW_OFTEN = -5.0;       // how often to create/destroy planes? (
 /// Log a message to X-Plane's Log.txt with sprintf-style parameters
 void LogMsg (const char* szMsg, ... )
 {
-    char buf[512] = PLUGIN_ID ": ";
+    char buf[512];
+    std::snprintf(buf, sizeof(buf), "%s: ", instanceName.c_str());
     va_list args;
     // Write all the variable parameters
     va_start (args, szMsg);
-    std::vsnprintf(buf+12, sizeof(buf)-14, szMsg, args);
+    std::vsnprintf(buf+strlen(buf), sizeof(buf)-strlen(buf), szMsg, args);
     va_end (args);
     std::strcat(buf, "\n");
     // write to log (flushed immediately -> expensive!)
@@ -543,17 +552,30 @@ void CBMenu (void* /*inMenuRef*/, void* inItemRef)
 
 PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc)
 {
-	std::strcpy(outName, "XPMP2-Stress (" PLUGIN_ID ")");
-	std::strcpy(outSig, "TwinFan.plugin.XPMP2-" PLUGIN_ID);
-	std::strcpy(outDesc, "Putting some stress on creating/removing instances");
-
     // use native paths, i.e. Posix style (as opposed to HFS style)
     // https://developer.x-plane.com/2014/12/mac-plugin-developers-you-should-be-using-native-paths/
-    XPLMEnableFeature("XPLM_USE_NATIVE_PATHS",1);
+    XPLMEnableFeature("XPLM_USE_NATIVE_PATHS", 1);
+
+    // What am I called actually? (Allowing to start several instance from one source code)
+    char myPath[256];
+    myPluginId = XPLMGetMyID();
+    XPLMGetPluginInfo(myPluginId, NULL, myPath, NULL, NULL);
+    // Extract the actual file name in a simplistic manner
+    char* ps = std::strrchr(myPath, '.');                   // cut off extension
+    if (ps) *ps = 0;
+    ps = strrchr(myPath, XPLMGetDirectorySeparator()[0]);
+    if (ps)
+        instanceName = ps+1;
+    else
+        instanceName = myPath;
+
+    std::snprintf(outName, 255, "XPMP2-Stress (%s)", instanceName.c_str());
+    std::snprintf(outSig, 255, "XPMP2.Issue23.%s", instanceName.c_str());
+	std::strcpy(outDesc, "Putting some stress on creating/removing instances");
 
     // Create the menu for the plugin
-    int my_slot = XPLMAppendMenuItem(XPLMFindPluginsMenu(), PLUGIN_ID, NULL, 0);
-    hMenu = XPLMCreateMenu(PLUGIN_ID, XPLMFindPluginsMenu(), my_slot, CBMenu, NULL);
+    int my_slot = XPLMAppendMenuItem(XPLMFindPluginsMenu(), instanceName.c_str(), NULL, 0);
+    hMenu = XPLMCreateMenu(instanceName.c_str(), XPLMFindPluginsMenu(), my_slot, CBMenu, NULL);
     XPLMAppendMenuItem(hMenu, "Toggle Planes",      (void*)1, 0);
     XPLMAppendMenuItem(hMenu, "Toggle Visibility",  (void*)2, 0);
     XPLMAppendMenuItem(hMenu, "(Cycle Models)",     (void*)3, 0);
@@ -582,7 +604,7 @@ PLUGIN_API int XPluginEnable(void)
     resourcePath += "Resources";            // should now be something like ".../Resources/plugins/XPMP2-Sample/Resources"
 
     // Try initializing XPMP2:
-    const char *res = XPMPMultiplayerInit (PLUGIN_ID,               // plugin name,
+    const char *res = XPMPMultiplayerInit (instanceName.c_str(),    // plugin name,
                                            resourcePath.c_str(),    // path to supplemental files
                                            CBIntPrefsFunc,          // configuration callback function
                                            "C172");                 // default ICAO type
@@ -602,6 +624,15 @@ PLUGIN_API int XPluginEnable(void)
         LogMsg("No CSL models installed...stress test makes no sense this way!");
         return 0;
     }
+
+    // Add a few more dataRefs so that different stress test plugins run with a different number of dataRefs
+    const int drToAdd = HowManyDRtoAdd();
+    for (int i = 0; i < drToAdd; i++) {
+        char drName[50];
+        std::snprintf(drName, sizeof(drName), "%s-%03d", instanceName.c_str(), i);
+        XPMPAddModelDataRef(drName);
+    }
+    LogMsg("Added %d custom dataRefs", drToAdd);
     
     // Now that we know the number of models create a random distribution
     rndMdl = std::uniform_int_distribution<>(0, XPMPGetNumberOfInstalledModels()-1);
