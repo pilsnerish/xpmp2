@@ -101,6 +101,8 @@ struct multiDataRefsTy {
     XPLMDataRef strbLights;             ///< strobe_lights_on
     XPLMDataRef taxiLights = nullptr;   ///< taxi_light_on
 
+    XPLMDataRef weight_on_wheels = nullptr;
+
     /// Looks OK, the dataRefs are available?
     inline operator bool () const { return X && Y && Z && pitch && roll && heading && taxiLights; }
     /// Clear the tested dataRefs
@@ -160,6 +162,7 @@ static XPLMDataRef drTcasYokePitch  = nullptr;      ///< sim/cockpit2/tcas/targe
 static XPLMDataRef drTcasYokeRoll   = nullptr;      ///< sim/cockpit2/tcas/targets/position/yolk_roll [sic!]    float[64]
 static XPLMDataRef drTcasYokeYaw    = nullptr;      ///< sim/cockpit2/tcas/targets/position/yolk_yaw [sic!]     float[64]
 static XPLMDataRef drTcasLights     = nullptr;      ///< sim/cockpit2/tcas/targets/position/lights          int[64] (bitfield: beacon=1, land=2, nav=4, strobe=8, taxi=16)
+static XPLMDataRef drTcasWeightOnWheels = nullptr;      ///< sim/cockpit2/tcas/targets/position/weight_on_wheels int[64]
 
 //
 // MARK: Global variables for TCAS handling
@@ -297,6 +300,8 @@ size_t AIUpdateMultiplayerDataRefs()
                 XPLMSetDatai(mdr.strbLights,    ac.v[V_CONTROLS_STROBE_LITES_ON] > 0.5f);
                 XPLMSetDatai(mdr.taxiLights,    ac.v[V_CONTROLS_TAXI_LITES_ON] > 0.5f);
 
+                XPLMSetDatai(mdr.weight_on_wheels, ac.v[V_MISC_WEIGHT_ON_WHEELS]);
+
                 // Shared data for providing textual info (see XPMPInfoTexts_t)
                 const infoDataRefsTy drI = gInfoRef.at(slot);
                 XPLMSetDatab(drI.infoTailNum,       ac.acInfoTexts.tailNum,       0, sizeof(XPMPInfoTexts_t::tailNum));
@@ -346,7 +351,8 @@ size_t AIUpdateTCASTargets ()
     static std::vector<float> vYokePitch;  
     static std::vector<float> vYokeRoll;   
     static std::vector<float> vYokeYaw;    
-    static std::vector<int>   vLights;     
+    static std::vector<int>   vLights;
+    static std::vector<int>   vWeightOnWheels;
 
     // Start filling up TCAS targets, ordered by distance,
     // so that the closest planes are in the lower slots,
@@ -370,6 +376,7 @@ size_t AIUpdateTCASTargets ()
     vYokeRoll.clear();      vYokeRoll.reserve(numSlots);
     vYokeYaw.clear();       vYokeYaw.reserve(numSlots);
     vLights.clear();        vLights.reserve(numSlots);
+    vWeightOnWheels.clear(); vWeightOnWheels.reserve(numSlots);
     
     // Loop over all filled slots
     size_t slot = 1;
@@ -396,6 +403,8 @@ size_t AIUpdateTCASTargets ()
             vPitch.push_back(ac.drawInfo.pitch);
             vRoll.push_back(ac.drawInfo.roll);
             vHeading.push_back(ac.drawInfo.heading);
+
+            vWeightOnWheels.push_back(ac.v[V_MISC_WEIGHT_ON_WHEELS]);
             
             // configuration
             vGear.push_back(ac.v[V_CONTROLS_GEAR_RATIO]);
@@ -504,6 +513,7 @@ size_t AIUpdateTCASTargets ()
     SET_DR(vf, YokeRoll);
     SET_DR(vf, YokeYaw);
     SET_DR(vi, Lights);
+    SET_DR(vi, WeightOnWheels);
     
     // return the number of targets
     return slot;
@@ -727,6 +737,8 @@ void AIMultiClearAIDataRefs (multiDataRefsTy& drM,
     XPLMSetDatai(drM.navLights, 0);
     XPLMSetDatai(drM.strbLights, 0);
     XPLMSetDatai(drM.taxiLights, 0);
+
+    XPLMSetDatai(drM.weight_on_wheels, 0);
 }
 
 /// Clears the shared info dataRefs
@@ -846,6 +858,7 @@ void AIMultiInit ()
             drTcasYokeRoll      = XPLMFindDataRef("sim/cockpit2/tcas/targets/position/yolk_roll");
             drTcasYokeYaw       = XPLMFindDataRef("sim/cockpit2/tcas/targets/position/yolk_yaw");
             drTcasLights        = XPLMFindDataRef("sim/cockpit2/tcas/targets/position/lights");
+            drTcasWeightOnWheels    = XPLMFindDataRef("sim/cockpit2/tcas/targets/position/weight_on_wheels");
         } else {
             // not expected to happen, but safety measure: fallback to classic TCAS
             drTcasModeS = nullptr;
@@ -906,6 +919,7 @@ void AIMultiInit ()
         FIND_PLANE_DR(navLights,            "nav_lights_on",        nDrM);
         FIND_PLANE_DR(strbLights,           "strobe_lights_on",     nDrM);
         FIND_PLANE_DR(taxiLights,           "taxi_light_on",        nDrM);
+        FIND_PLANE_DR(weight_on_wheels,     "weight_on_wheels",     nDrM);
         if (!drM) break;                    // break out of loop once the slot doesn't exist
         gMultiRef.push_back(drM);
     }

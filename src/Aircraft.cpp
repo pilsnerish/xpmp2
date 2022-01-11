@@ -103,6 +103,8 @@ static std::vector<const char*> DR_NAMES = {
     "libxplanemp/engines/engine_rotation_speed_rad_sec4",
 
     "libxplanemp/misc/touch_down",
+
+    "libxplanemp/misc/weight_on_wheel",
     
     // always last, marks the end in the call to XPLMCreateInstace:
     nullptr
@@ -869,6 +871,8 @@ void XPCAircraft::UpdatePosition(float, int)
         SetReversDeployRatio    (acSurfaces.reversRatio);
         
         SetTouchDown            (acSurfaces.touchDown);
+
+        SetWeightOnWheels       (acSurfaces.weightOnWheels);
     }
     
     // The following 2 calls provide directly the member variable structures:

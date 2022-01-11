@@ -76,6 +76,7 @@ const std::array<RemoteDataRefPackTy,V_COUNT> REMOTE_DR_DEF = { {
     {   0.0f,  1500.0f},        // V_ENGINES_ENGINE_ROTATION_SPEED_RAD_SEC3, `libxplanemp/engines/engine_rotation_speed_rad_sec3`
     {   0.0f,  1500.0f},        // V_ENGINES_ENGINE_ROTATION_SPEED_RAD_SEC4, `libxplanemp/engines/engine_rotation_speed_rad_sec4`
     {   0.0f,     1.0f},        // V_MISC_TOUCH_DOWN,                        `libxplanemp/misc/touch_down`
+    {   0.0f,     1.0f},        // V_MISC_WEIGHT_ON_WHEELS,                  `libxplanemp/misc/weight_on_wheels`
 } };
 
 
@@ -308,8 +309,8 @@ struct RemoteMsgAcDetailTy_v0 : public RemoteMsgBaseTy {
 #pragma pack(pop)                               // reseting packing
 #endif
 
-static_assert(sizeof(RemoteAcDetailTy_v0)   ==  94+42,  "RemoteAcDetailTy_v0 doesn't have expected size");
-static_assert(sizeof(RemoteMsgAcDetailTy_v0)== 102+42,  "RemoteMsgAcDetailTy_v0 doesn't have expected size");
+static_assert(sizeof(RemoteAcDetailTy_v0)   ==  94+43,  "RemoteAcDetailTy_v0 doesn't have expected size");
+static_assert(sizeof(RemoteMsgAcDetailTy_v0)== 102+43,  "RemoteMsgAcDetailTy_v0 doesn't have expected size");
 
 #if defined(__GNUC__) && (__GNUC__ >= 9)
 #pragma GCC diagnostic push
