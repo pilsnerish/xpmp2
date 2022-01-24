@@ -104,7 +104,7 @@ static std::vector<const char*> DR_NAMES = {
 
     "libxplanemp/misc/touch_down",
 
-    "libxplanemp/misc/weight_on_wheel",
+    "libxplanemp/misc/weight_on_wheels",
     
     // always last, marks the end in the call to XPLMCreateInstace:
     nullptr
